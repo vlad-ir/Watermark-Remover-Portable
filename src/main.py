@@ -25,6 +25,7 @@ class WatermarkRemover:
         self.cap = None
         self.is_image = False
         self.image_path = None
+        self.video_path = None  # ← ДОБАВЛЕНО
         self.original_frame = None
         self.display_frame = None
         self.mask = None
@@ -219,6 +220,7 @@ class WatermarkRemover:
             self.cap = None
         self.is_image = False
         self.image_path = None
+        self.video_path = None  # ← ДОБАВЛЕНО
         self.original_frame = None
         self.mask = None
         self.frame_idx = 0
@@ -240,6 +242,7 @@ class WatermarkRemover:
             return
 
         self.reset_media_state()
+        self.video_path = path  # ← ДОБАВЛЕНО
 
         self.cap = cv2.VideoCapture(path)
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -397,7 +400,6 @@ class WatermarkRemover:
 
     def canvas_to_image_coords(self, canvas_x, canvas_y):
         """Преобразует координаты canvas в координаты исходного изображения с учётом зума и скролла"""
-        # Учитываем скролл: canvasx/canvasy возвращают позицию в логических координатах canvas
         logical_x = self.canvas.canvasx(canvas_x)
         logical_y = self.canvas.canvasy(canvas_y)
 
@@ -408,7 +410,6 @@ class WatermarkRemover:
         img_y = max(0, min(img_y, self.frame_height - 1))
 
         return img_x, img_y
-
 
     def start_draw(self, event):
         if self.panning:
@@ -445,7 +446,6 @@ class WatermarkRemover:
         if self.cursor_id:
             self.canvas.delete(self.cursor_id)
 
-        # Используем логические координаты (с учётом скролла) для позиционирования круга
         logical_x = self.canvas.canvasx(event.x)
         logical_y = self.canvas.canvasy(event.y)
 
@@ -535,12 +535,13 @@ class WatermarkRemover:
         finally:
             self.processing = False
 
+
     def process_all(self):
         if self.is_image:
             self.process_current()
             return
 
-        if self.cap is None:
+        if self.cap is None or not self.video_path:
             messagebox.showwarning("Warning", "No video loaded")
             return
 
@@ -564,45 +565,26 @@ class WatermarkRemover:
         self.processing = True
         self.status_var.set("Processing all frames...")
 
+        def progress_callback(current, total):
+            """Обновляет статусную строку из фонового потока"""
+            self.root.after(0, lambda: self.status_var.set(f"Processing: {current}/{total}"))
+
         def process_thread():
             import traceback
             try:
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                out = cv2.VideoWriter(output_path, fourcc, self.fps,
-                                      (self.frame_width, self.frame_height))
+                from video_processor import VideoProcessor
 
-                global_mask = self.mask.copy()
+                processor = VideoProcessor(self.inpainter, device="cuda" if self.has_cuda() else "cpu")
+                processor.process_video(
+                    self.video_path,
+                    output_path,
+                    self.mask.copy(),
+                    self.fps,
+                    progress_callback=progress_callback
+                )
 
-                for i in range(self.total_frames):
-                    if not self.processing:
-                        break
-
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-                    ret, frame = self.cap.read()
-                    if not ret:
-                        break
-
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-                    if np.any(global_mask > 0):
-                        result = self.inpaint_func(
-                            frame_rgb, global_mask, self.inpainter,
-                            device="cuda" if self.has_cuda() else "cpu"
-                        )
-                    else:
-                        result = frame_rgb
-
-                    result_bgr = cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
-                    out.write(result_bgr)
-
-                    if i % 10 == 0:
-                        def update_status(idx=i):
-                            self.status_var.set(f"Processing: {idx + 1}/{self.total_frames}")
-                        self.root.after(0, update_status)
-
-                out.release()
                 self.root.after(0, lambda: self.status_var.set(f"Saved: {output_path}"))
-                self.root.after(0, lambda: messagebox.showinfo("Done", "Video processing complete!"))
+                self.root.after(0, lambda: messagebox.showinfo("Done", "Video processing complete!\nAudio preserved."))
 
             except Exception as e:
                 tb = traceback.format_exc()
@@ -613,6 +595,7 @@ class WatermarkRemover:
                 self.processing = False
 
         threading.Thread(target=process_thread, daemon=True).start()
+
 
     def save_result(self):
         if self.original_frame is None:
