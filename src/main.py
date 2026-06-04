@@ -34,10 +34,19 @@ class WatermarkRemover:
         self.frame_width = 0
         self.frame_height = 0
 
-        # Scaling
+        # Scaling & Zoom
+        self.base_scale = 1.0
+        self.zoom_level = 0
         self.scale = 1.0
         self.offset_x = 0
         self.offset_y = 0
+
+        # Panning state (for zoomed view)
+        self.panning = False
+        self.pan_start_x = 0
+        self.pan_start_y = 0
+        self.scroll_start_x = 0
+        self.scroll_start_y = 0
 
         # Drawing state
         self.drawing = False
@@ -65,6 +74,12 @@ class WatermarkRemover:
         ttk.Button(control_frame, text="Process", command=self.process_current).pack(side=tk.LEFT, padx=2)
         ttk.Button(control_frame, text="Process All", command=self.process_all).pack(side=tk.LEFT, padx=2)
         ttk.Button(control_frame, text="Save", command=self.save_result).pack(side=tk.LEFT, padx=2)
+
+        # Zoom controls
+        ttk.Label(control_frame, text="Zoom:").pack(side=tk.LEFT, padx=(20, 0))
+        self.zoom_label = ttk.Label(control_frame, text="100%")
+        self.zoom_label.pack(side=tk.LEFT, padx=2)
+        ttk.Button(control_frame, text="Reset", command=self.reset_zoom, width=6).pack(side=tk.LEFT, padx=2)
 
         # Brush settings
         ttk.Label(control_frame, text="Brush:").pack(side=tk.LEFT, padx=(20, 0))
@@ -115,7 +130,18 @@ class WatermarkRemover:
         self.canvas.bind("<MouseWheel>", self.on_mousewheel)
         self.canvas.bind("<Leave>", self.on_mouse_leave)
 
-        # Bottom frame navigation (только для видео)
+        # Zoom events (Ctrl + wheel)
+        self.canvas.bind("<Control-MouseWheel>", self.on_zoom)
+        self.root.bind("<Control-plus>", lambda e: self.zoom_in())
+        self.root.bind("<Control-minus>", lambda e: self.zoom_out())
+        self.root.bind("<Control-0>", lambda e: self.reset_zoom())
+
+        # Pan events (middle mouse button or Space+drag)
+        self.canvas.bind("<Button-2>", self.start_pan)  # middle button
+        self.canvas.bind("<B2-Motion>", self.do_pan)
+        self.canvas.bind("<ButtonRelease-2>", self.stop_pan)
+
+        # Bottom frame navigation
         self.nav_frame = ttk.Frame(self.root)
         self.nav_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -152,7 +178,11 @@ class WatermarkRemover:
 
         scale_w = canvas_w / img_w
         scale_h = canvas_h / img_h
-        self.scale = min(scale_w, scale_h, 1.0)
+        self.base_scale = min(scale_w, scale_h, 1.0)
+
+        # Apply zoom
+        zoom_factor = 1.2 ** self.zoom_level
+        self.scale = self.base_scale * zoom_factor
 
         new_w = int(img_w * self.scale)
         new_h = int(img_h * self.scale)
@@ -184,7 +214,6 @@ class WatermarkRemover:
             return False
 
     def reset_media_state(self):
-        """Сброс состояния перед загрузкой нового медиа"""
         if self.cap:
             self.cap.release()
             self.cap = None
@@ -197,6 +226,7 @@ class WatermarkRemover:
         self.fps = 30
         self.frame_width = 0
         self.frame_height = 0
+        self.zoom_level = 0
 
     def load_video(self):
         path = filedialog.askopenfilename(
@@ -238,7 +268,7 @@ class WatermarkRemover:
 
         try:
             pil_img = Image.open(path).convert('RGB')
-            self.original_frame = np.array(pil_img)  # уже RGB
+            self.original_frame = np.array(pil_img)
         except Exception as e:
             messagebox.showerror("Error", f"Cannot load image: {path}\n{e}")
             return
@@ -301,27 +331,88 @@ class WatermarkRemover:
         self.canvas.config(scrollregion=(0, 0, new_w + self.offset_x * 2, new_h + self.offset_y * 2))
 
     def update_info(self):
+        zoom_pct = int((1.2 ** self.zoom_level) * 100)
         if self.is_image:
             self.info_label.config(
-                text=f"Image | Size: {self.frame_width}x{self.frame_height} | Scale: {self.scale:.1%}"
+                text=f"Image | Size: {self.frame_width}x{self.frame_height} | Scale: {self.scale:.1%} | Zoom: {zoom_pct}%"
             )
         else:
             self.info_label.config(
                 text=f"Frame: {self.frame_idx + 1}/{self.total_frames} | "
                      f"Size: {self.frame_width}x{self.frame_height} | "
-                     f"Scale: {self.scale:.1%}"
+                     f"Scale: {self.scale:.1%} | Zoom: {zoom_pct}%"
             )
 
+    # ========== ZOOM ==========
+
+    def on_zoom(self, event):
+        """Ctrl + колёсико мыши — зум"""
+        if event.delta > 0:
+            self.zoom_in()
+        else:
+            self.zoom_out()
+
+    def zoom_in(self):
+        self.zoom_level = min(self.zoom_level + 1, 10)  # max ~6x
+        self.calculate_scale()
+        self.show_frame()
+        self.update_info()
+
+    def zoom_out(self):
+        self.zoom_level = max(self.zoom_level - 1, -5)  # min ~0.4x
+        self.calculate_scale()
+        self.show_frame()
+        self.update_info()
+
+    def reset_zoom(self):
+        self.zoom_level = 0
+        self.calculate_scale()
+        self.show_frame()
+        self.update_info()
+
+    # ========== PAN ==========
+
+    def start_pan(self, event):
+        """Средняя кнопка мыши — начало панорамирования"""
+        self.panning = True
+        self.pan_start_x = event.x
+        self.pan_start_y = event.y
+        self.scroll_start_x = self.h_scroll.get()[0] if self.h_scroll.get() else 0
+        self.scroll_start_y = self.v_scroll.get()[0] if self.v_scroll.get() else 0
+        self.canvas.config(cursor="fleur")
+
+    def do_pan(self, event):
+        if not self.panning:
+            return
+        dx = self.pan_start_x - event.x
+        dy = self.pan_start_y - event.y
+        self.canvas.xview_moveto(self.scroll_start_x + dx / self.canvas.winfo_width())
+        self.canvas.yview_moveto(self.scroll_start_y + dy / self.canvas.winfo_height())
+
+    def stop_pan(self, event):
+        self.panning = False
+        self.canvas.config(cursor="crosshair")
+
+    # ========== DRAWING ==========
+
     def canvas_to_image_coords(self, canvas_x, canvas_y):
-        img_x = int((canvas_x - self.offset_x) / self.scale)
-        img_y = int((canvas_y - self.offset_y) / self.scale)
+        """Преобразует координаты canvas в координаты исходного изображения с учётом зума и скролла"""
+        # Учитываем скролл: canvasx/canvasy возвращают позицию в логических координатах canvas
+        logical_x = self.canvas.canvasx(canvas_x)
+        logical_y = self.canvas.canvasy(canvas_y)
+
+        img_x = int((logical_x - self.offset_x) / self.scale)
+        img_y = int((logical_y - self.offset_y) / self.scale)
 
         img_x = max(0, min(img_x, self.frame_width - 1))
         img_y = max(0, min(img_y, self.frame_height - 1))
 
         return img_x, img_y
 
+
     def start_draw(self, event):
+        if self.panning:
+            return
         self.drawing = True
         self.last_x, self.last_y = self.canvas_to_image_coords(event.x, event.y)
         self.draw(event)
@@ -354,14 +445,15 @@ class WatermarkRemover:
         if self.cursor_id:
             self.canvas.delete(self.cursor_id)
 
-        canvas_x = event.x
-        canvas_y = event.y
+        # Используем логические координаты (с учётом скролла) для позиционирования круга
+        logical_x = self.canvas.canvasx(event.x)
+        logical_y = self.canvas.canvasy(event.y)
 
         display_brush = max(2, int(self.brush_size * self.scale))
 
         self.cursor_id = self.canvas.create_oval(
-            canvas_x - display_brush, canvas_y - display_brush,
-            canvas_x + display_brush, canvas_y + display_brush,
+            logical_x - display_brush, logical_y - display_brush,
+            logical_x + display_brush, logical_y + display_brush,
             outline="yellow", width=2, tags="cursor"
         )
 
@@ -371,6 +463,7 @@ class WatermarkRemover:
             self.cursor_id = None
 
     def on_mousewheel(self, event):
+        """Без Ctrl — изменение размера кисти"""
         delta = event.delta // 120
         current = self.brush_scale.get()
         new_val = max(1, min(100, current + delta * 2))
@@ -399,13 +492,11 @@ class WatermarkRemover:
             filetypes=[("PNG files", "*.png"), ("All files", "*.*")]
         )
         if path:
-            # PIL для поддержки Unicode путей на Windows
             mask_img = Image.fromarray(self.mask)
             mask_img.save(path)
             self.status_var.set(f"Mask saved: {path}")
 
     def process_current(self):
-        """Обработать текущий кадр/изображение"""
         if self.original_frame is None:
             messagebox.showwarning("Warning", "No image or video loaded")
             return
@@ -445,7 +536,6 @@ class WatermarkRemover:
             self.processing = False
 
     def process_all(self):
-        """Для видео — обработать все кадры. Для фото — то же, что Process."""
         if self.is_image:
             self.process_current()
             return
@@ -525,7 +615,6 @@ class WatermarkRemover:
         threading.Thread(target=process_thread, daemon=True).start()
 
     def save_result(self):
-        """Сохранить результат — видео или изображение"""
         if self.original_frame is None:
             return
 
@@ -539,12 +628,12 @@ class WatermarkRemover:
                 ]
             )
             if path:
-                # PIL: self.original_frame уже в RGB — не конвертируем!
                 pil_img = Image.fromarray(self.original_frame)
                 pil_img.save(path)
                 self.status_var.set(f"Image saved: {path}")
         else:
             self.process_all()
+
 
 if __name__ == "__main__":
     root = tk.Tk()
