@@ -27,9 +27,15 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "VENV=%ROOT%\.venv"
 set "MODELS=%ROOT%\models"
 set "FFMPEG_DIR=%ROOT%\ffmpeg"
+set "CACHE=%ROOT%\cache"
+
+:: UV локальный кэш + copy mode для портативности
+set "UV_CACHE_DIR=%CACHE%\uv"
+set "UV_LINK_MODE=copy"
 
 echo [INFO] Starting Watermark Remover GUI...
 echo [INFO] Models folder: %MODELS%
+echo [INFO] UV cache: %UV_CACHE_DIR%
 
 set "PATH=%VENV%\Scripts;%VENV%\Library\bin;%FFMPEG_DIR%\bin;%PATH%"
 
@@ -62,6 +68,10 @@ set "MODELS=%ROOT%\models"
 set "OUTPUTS=%ROOT%\outputs"
 set "FFMPEG_DIR=%ROOT%\ffmpeg"
 
+:: UV локальный кэш + copy mode для портативности
+set "UV_CACHE_DIR=%CACHE%\uv"
+set "UV_LINK_MODE=copy"
+
 set "MINICONDA_EXE=%TOOLS%\miniconda.exe"
 set "UV_EXE=%TOOLS%\uv.exe"
 
@@ -71,6 +81,7 @@ set "UV_URL=https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-p
 echo Root: %ROOT%
 echo Tools: %TOOLS%
 echo Cache: %CACHE%
+echo UV cache: %UV_CACHE_DIR%
 
 if exist "%VENV%\python.exe" (
     echo Found existing installation.
@@ -87,6 +98,7 @@ if exist "%VENV%\python.exe" (
 echo [STEP] Creating folders...
 if not exist "%TOOLS%" mkdir "%TOOLS%"
 if not exist "%CACHE%" mkdir "%CACHE%"
+if not exist "%CACHE%\uv" mkdir "%CACHE%\uv"
 if not exist "%MODELS%" mkdir "%MODELS%"
 if not exist "%OUTPUTS%" mkdir "%OUTPUTS%"
 if not exist "%ROOT%\src" mkdir "%ROOT%\src"
@@ -166,6 +178,7 @@ uv pip install --force-reinstall numpy==1.26.4 --python "%VENV%\python.exe"
 
 echo [INFO] Models folder: %MODELS%
 echo [INFO] ffmpeg: %FFMPEG_DIR%\bin
+echo [INFO] UV cache: %UV_CACHE_DIR%
 
 set "PATH=%OLD_PATH%"
 
@@ -193,6 +206,11 @@ set "CONDA_DIR=%TOOLS%\miniconda"
 set "VENV=%ROOT%\.venv"
 set "CACHE=%ROOT%\cache"
 set "FFMPEG_DIR=%ROOT%\ffmpeg"
+
+:: UV локальный кэш + copy mode для портативности
+set "UV_CACHE_DIR=%CACHE%\uv"
+set "UV_LINK_MODE=copy"
+
 set "PATH=%CONDA_DIR%\Scripts;%CONDA_DIR%;%TOOLS%;%FFMPEG_DIR%\bin;%PATH%"
 
 if not exist "%VENV%\python.exe" (
@@ -237,5 +255,6 @@ echo [STEP] Freezing NumPy to 1.26.4...
 uv pip install --force-reinstall numpy==1.26.4 --python "%VENV%\python.exe"
 
 echo [INFO] Update finished.
+echo [INFO] UV cache: %UV_CACHE_DIR%
 pause
 goto main_menu
