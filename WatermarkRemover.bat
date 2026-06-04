@@ -26,11 +26,12 @@ set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "VENV=%ROOT%\.venv"
 set "MODELS=%ROOT%\models"
+set "FFMPEG_DIR=%ROOT%\ffmpeg"
 
 echo [INFO] Starting Watermark Remover GUI...
 echo [INFO] Models folder: %MODELS%
 
-set "PATH=%VENV%\Scripts;%VENV%\Library\bin;%PATH%"
+set "PATH=%VENV%\Scripts;%VENV%\Library\bin;%FFMPEG_DIR%\bin;%PATH%"
 
 REM Автофикс numpy, если вдруг обновился
 for /f "tokens=*" %%a in ('"%VENV%\python.exe" -c "import numpy; print(numpy.__version__)" 2^>nul') do set "NUMPY_VER=%%a"
@@ -59,6 +60,7 @@ set "VENV=%ROOT%\.venv"
 set "CACHE=%ROOT%\cache"
 set "MODELS=%ROOT%\models"
 set "OUTPUTS=%ROOT%\outputs"
+set "FFMPEG_DIR=%ROOT%\ffmpeg"
 
 set "MINICONDA_EXE=%TOOLS%\miniconda.exe"
 set "UV_EXE=%TOOLS%\uv.exe"
@@ -78,6 +80,7 @@ if exist "%VENV%\python.exe" (
     if exist "%VENV%" rmdir /s /q "%VENV%" 2>nul
     if exist "%CACHE%" rmdir /s /q "%CACHE%" 2>nul
     if exist "%TOOLS%" rmdir /s /q "%TOOLS%" 2>nul
+    if exist "%FFMPEG_DIR%" rmdir /s /q "%FFMPEG_DIR%" 2>nul
     echo Old folders deleted.
 )
 
@@ -106,8 +109,20 @@ del "%TOOLS%\uv.zip" >nul 2>&1
 :uv_present
 echo UV ready.
 
+echo [STEP] Downloading ffmpeg...
+set "FFMPEG_ZIP=%CACHE%\ffmpeg.zip"
+if not exist "%FFMPEG_DIR%\bin\ffmpeg.exe" (
+    powershell -NoProfile -NonInteractive -Command "Invoke-WebRequest -Uri 'https://huggingface.co/datasets/LeeAeron/ffmpeg_for_ai/resolve/main/ffmpeg+libs.zip?download=true' -OutFile '%FFMPEG_ZIP%'"
+    if not exist "%FFMPEG_DIR%" mkdir "%FFMPEG_DIR%"
+    powershell -NoProfile -NonInteractive -Command "Expand-Archive -Path '%FFMPEG_ZIP%' -DestinationPath '%FFMPEG_DIR%' -Force"
+    del "%FFMPEG_ZIP%" >nul 2>&1
+    echo ffmpeg downloaded.
+) else (
+    echo ffmpeg already exists.
+)
+
 set "OLD_PATH=%PATH%"
-set "PATH=%CONDA_DIR%\Scripts;%CONDA_DIR%;%TOOLS%;%PATH%"
+set "PATH=%CONDA_DIR%\Scripts;%CONDA_DIR%;%TOOLS%;%FFMPEG_DIR%\bin;%PATH%"
 
 echo [STEP] Creating conda environment...
 if exist "%VENV%\python.exe" goto env_present
@@ -150,6 +165,7 @@ echo [STEP] Freezing NumPy to 1.26.4 (prevent auto-upgrade)...
 uv pip install --force-reinstall numpy==1.26.4 --python "%VENV%\python.exe"
 
 echo [INFO] Models folder: %MODELS%
+echo [INFO] ffmpeg: %FFMPEG_DIR%\bin
 
 set "PATH=%OLD_PATH%"
 
@@ -175,7 +191,9 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "TOOLS=%ROOT%\tools"
 set "CONDA_DIR=%TOOLS%\miniconda"
 set "VENV=%ROOT%\.venv"
-set "PATH=%CONDA_DIR%\Scripts;%CONDA_DIR%;%TOOLS%;%PATH%"
+set "CACHE=%ROOT%\cache"
+set "FFMPEG_DIR=%ROOT%\ffmpeg"
+set "PATH=%CONDA_DIR%\Scripts;%CONDA_DIR%;%TOOLS%;%FFMPEG_DIR%\bin;%PATH%"
 
 if not exist "%VENV%\python.exe" (
     echo Installation not found. Installing now...
@@ -201,6 +219,19 @@ uv pip install --upgrade opencv-python pillow tqdm --python "%VENV%\python.exe"
 
 echo [INFO] Updating SimpleLama...
 uv pip install --upgrade simple-lama-inpainting --no-deps --python "%VENV%\python.exe"
+
+echo [STEP] Checking ffmpeg...
+if not exist "%FFMPEG_DIR%\bin\ffmpeg.exe" (
+    echo [INFO] Downloading ffmpeg...
+    set "FFMPEG_ZIP=%CACHE%\ffmpeg.zip"
+    powershell -NoProfile -NonInteractive -Command "Invoke-WebRequest -Uri 'https://huggingface.co/datasets/LeeAeron/ffmpeg_for_ai/resolve/main/ffmpeg+libs.zip?download=true' -OutFile '%FFMPEG_ZIP%'"
+    if not exist "%FFMPEG_DIR%" mkdir "%FFMPEG_DIR%"
+    powershell -NoProfile -NonInteractive -Command "Expand-Archive -Path '%FFMPEG_ZIP%' -DestinationPath '%FFMPEG_DIR%' -Force"
+    del "%FFMPEG_ZIP%" >nul 2>&1
+    echo ffmpeg downloaded.
+) else (
+    echo ffmpeg already exists.
+)
 
 echo [STEP] Freezing NumPy to 1.26.4...
 uv pip install --force-reinstall numpy==1.26.4 --python "%VENV%\python.exe"
