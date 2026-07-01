@@ -121,20 +121,34 @@ del "%TOOLS%\uv.zip" >nul 2>&1
 :uv_present
 echo UV ready.
 
-echo [STEP] Downloading ffmpeg...
-set "FFMPEG_ZIP=%CACHE%\ffmpeg.zip"
+echo [STEP] Checking or Installing FFmpeg...
+
+rem 1. Проверяем, есть ли уже ffmpeg в вашей локальной папке
 if not exist "%FFMPEG_DIR%\bin\ffmpeg.exe" (
-    powershell -NoProfile -NonInteractive -Command "Invoke-WebRequest -Uri 'https://huggingface.co/datasets/LeeAeron/ffmpeg_for_ai/resolve/main/ffmpeg+libs.zip?download=true' -OutFile '%FFMPEG_ZIP%'"
-    if not exist "%FFMPEG_DIR%" mkdir "%FFMPEG_DIR%"
-    powershell -NoProfile -NonInteractive -Command "Expand-Archive -Path '%FFMPEG_ZIP%' -DestinationPath '%FFMPEG_DIR%' -Force"
-    del "%FFMPEG_ZIP%" >nul 2>&1
-    echo ffmpeg downloaded.
+    
+    echo FFmpeg не найден в локальной папке. Проверяем систему...
+    
+    rem 2. Проверяем, установлен ли ffmpeg глобально в Windows через winget
+    where ffmpeg >nul 2>&1
+    if errorlevel 1 (
+        echo Устанавливаем официальный FFmpeg через Windows Package Manager...
+        winget install --id Gyan.FFmpeg --silent --accept-source-agreements --accept-package-agreements
+    )
+    
+    rem 3. Создаем нужную для вашего ИИ-скрипта структуру папок
+    if not exist "%FFMPEG_DIR%\bin" mkdir "%FFMPEG_DIR%\bin"
+    
+    rem 4. Копируем исполняемые файлы из системного пути winget в вашу папку %FFMPEG_DIR%
+    rem Это гарантирует, что ваш ИИ-скрипт найдет файлы именно там, где ожидает
+    powershell -NoProfile -NonInteractive -Command "$sysPath = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source; if ($sysPath) { $sysDir = Split-Path $sysPath; Copy-Item -Path \"$sysDir\*\" -Destination '%FFMPEG_DIR%\bin' -Force; echo 'FFmpeg успешно скопирован в окружение ИИ.' } else { echo '[ERROR] Не удалось скопировать файлы FFmpeg!' }"
+
 ) else (
     echo ffmpeg already exists.
 )
 
 set "OLD_PATH=%PATH%"
 set "PATH=%CONDA_DIR%\Scripts;%CONDA_DIR%;%TOOLS%;%FFMPEG_DIR%\bin;%PATH%"
+
 
 echo [STEP] Creating conda environment...
 if exist "%VENV%\python.exe" goto env_present
@@ -240,13 +254,20 @@ uv pip install --upgrade simple-lama-inpainting --no-deps --python "%VENV%\pytho
 
 echo [STEP] Checking ffmpeg...
 if not exist "%FFMPEG_DIR%\bin\ffmpeg.exe" (
-    echo [INFO] Downloading ffmpeg...
-    set "FFMPEG_ZIP=%CACHE%\ffmpeg.zip"
-    powershell -NoProfile -NonInteractive -Command "Invoke-WebRequest -Uri 'https://huggingface.co/datasets/LeeAeron/ffmpeg_for_ai/resolve/main/ffmpeg+libs.zip?download=true' -OutFile '%FFMPEG_ZIP%'"
-    if not exist "%FFMPEG_DIR%" mkdir "%FFMPEG_DIR%"
-    powershell -NoProfile -NonInteractive -Command "Expand-Archive -Path '%FFMPEG_ZIP%' -DestinationPath '%FFMPEG_DIR%' -Force"
-    del "%FFMPEG_ZIP%" >nul 2>&1
-    echo ffmpeg downloaded.
+    echo [INFO] FFmpeg не найден в локальной папке. Проверяем систему...
+    
+    rem 1. Проверяем, установлен ли ffmpeg глобально в Windows через winget
+    where ffmpeg >nul 2>&1
+    if errorlevel 1 (
+        echo [INFO] Устанавливаем официальный FFmpeg через Windows Package Manager...
+        winget install --id Gyan.FFmpeg --silent --accept-source-agreements --accept-package-agreements
+    )
+    
+    rem 2. Создаем нужную для вашего ИИ-скрипта структуру папок
+    if not exist "%FFMPEG_DIR%\bin" mkdir "%FFMPEG_DIR%\bin"
+    
+    rem 3. Находим системный путь winget и копируем исполняемые файлы в вашу папку %FFMPEG_DIR%\bin
+    powershell -NoProfile -NonInteractive -Command "$sysPath = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source; if ($sysPath) { $sysDir = Split-Path $sysPath; Copy-Item -Path \"$sysDir\*\" -Destination '%FFMPEG_DIR%\bin' -Force; echo 'ffmpeg downloaded.' } else { echo '[ERROR] Не удалось скопировать файлы FFmpeg!' }"
 ) else (
     echo ffmpeg already exists.
 )
