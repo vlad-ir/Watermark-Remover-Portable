@@ -122,25 +122,16 @@ del "%TOOLS%\uv.zip" >nul 2>&1
 echo UV ready.
 
 echo [STEP] Checking or Installing FFmpeg...
+if not exist "%FFMPEG_DIR%\bin\ffmpeg.exe" (    
+    echo FFmpeg not found...
 
-rem 1. Проверяем, есть ли уже ffmpeg в вашей локальной папке
-if not exist "%FFMPEG_DIR%\bin\ffmpeg.exe" (
-    
-    echo FFmpeg не найден в локальной папке. Проверяем систему...
-    
-    rem 2. Проверяем, установлен ли ffmpeg глобально в Windows через winget
     where ffmpeg >nul 2>&1
     if errorlevel 1 (
-        echo Устанавливаем официальный FFmpeg через Windows Package Manager...
+        echo Install FFmpeg with help of Windows Package Manager...
         winget install --id Gyan.FFmpeg --silent --accept-source-agreements --accept-package-agreements
     )
-    
-    rem 3. Создаем нужную для вашего ИИ-скрипта структуру папок
     if not exist "%FFMPEG_DIR%\bin" mkdir "%FFMPEG_DIR%\bin"
-    
-    rem 4. Копируем исполняемые файлы из системного пути winget в вашу папку %FFMPEG_DIR%
-    rem Это гарантирует, что ваш ИИ-скрипт найдет файлы именно там, где ожидает
-    powershell -NoProfile -NonInteractive -Command "$sysPath = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source; if ($sysPath) { $sysDir = Split-Path $sysPath; Copy-Item -Path \"$sysDir\*\" -Destination '%FFMPEG_DIR%\bin' -Force; echo 'FFmpeg успешно скопирован в окружение ИИ.' } else { echo '[ERROR] Не удалось скопировать файлы FFmpeg!' }"
+    powershell -NoProfile -NonInteractive -Command "$sysPath = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source; if ($sysPath) { $sysDir = Split-Path $sysPath; Copy-Item -Path \"$sysDir\*\" -Destination '%FFMPEG_DIR%\bin' -Force; echo 'FFmpeg successfully copied to the AI environment.' } else { echo '[ERROR] Couldn't copy FFmpeg files!' }"
 
 ) else (
     echo ffmpeg already exists.
@@ -254,20 +245,14 @@ uv pip install --upgrade simple-lama-inpainting --no-deps --python "%VENV%\pytho
 
 echo [STEP] Checking ffmpeg...
 if not exist "%FFMPEG_DIR%\bin\ffmpeg.exe" (
-    echo [INFO] FFmpeg не найден в локальной папке. Проверяем систему...
-    
-    rem 1. Проверяем, установлен ли ffmpeg глобально в Windows через winget
+    echo [INFO] FFmpeg is not found in the local folder. Checking the system...
     where ffmpeg >nul 2>&1
     if errorlevel 1 (
-        echo [INFO] Устанавливаем официальный FFmpeg через Windows Package Manager...
+        echo [INFO] Installing the official FFmpeg via Windows Package Manager...
         winget install --id Gyan.FFmpeg --silent --accept-source-agreements --accept-package-agreements
     )
-    
-    rem 2. Создаем нужную для вашего ИИ-скрипта структуру папок
     if not exist "%FFMPEG_DIR%\bin" mkdir "%FFMPEG_DIR%\bin"
-    
-    rem 3. Находим системный путь winget и копируем исполняемые файлы в вашу папку %FFMPEG_DIR%\bin
-    powershell -NoProfile -NonInteractive -Command "$sysPath = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source; if ($sysPath) { $sysDir = Split-Path $sysPath; Copy-Item -Path \"$sysDir\*\" -Destination '%FFMPEG_DIR%\bin' -Force; echo 'ffmpeg downloaded.' } else { echo '[ERROR] Не удалось скопировать файлы FFmpeg!' }"
+    powershell -NoProfile -NonInteractive -Command "$sysPath = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source; if ($sysPath) { $sysDir = Split-Path $sysPath; Copy-Item -Path \"$sysDir\*\" -Destination '%FFMPEG_DIR%\bin' -Force; echo 'ffmpeg downloaded.' } else { echo '[ERROR] Couldn't copy FFmpeg files!' }"
 ) else (
     echo ffmpeg already exists.
 )
