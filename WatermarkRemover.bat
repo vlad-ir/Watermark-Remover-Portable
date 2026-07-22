@@ -4,9 +4,9 @@ chcp 65001 >nul
 :main_menu
 cls
 echo ====================================================================
-echo             Watermark Remover Portable
+echo             Watermark Remover Portable (PyQt6)
 echo ====================================================================
-echo 1. Start GUI (remove watermarks from video)
+echo 1. Start GUI (remove watermarks from video/images)
 echo 2. Install / Re-install Watermark Remover
 echo 3. Update Watermark Remover
 echo ====================================================================
@@ -28,23 +28,23 @@ set "VENV=%ROOT%\.venv"
 set "MODELS=%ROOT%\models"
 set "FFMPEG_DIR=%ROOT%\ffmpeg"
 set "CACHE=%ROOT%\cache"
+set "ASSETS=%ROOT%\assets"
 
-:: UV локальный кэш + copy mode для портативности
+:: UV local cache + copy mode for portability
 set "UV_CACHE_DIR=%CACHE%\uv"
 set "UV_LINK_MODE=copy"
 
 echo [INFO] Starting Watermark Remover GUI...
 echo [INFO] Models folder: %MODELS%
+echo [INFO] Assets folder: %ASSETS%
 echo [INFO] UV cache: %UV_CACHE_DIR%
 
 set "PATH=%VENV%\Scripts;%VENV%\Library\bin;%FFMPEG_DIR%\bin;%PATH%"
 
-REM Автофикс numpy, если вдруг обновился
-for /f "tokens=*" %%a in ('"%VENV%\python.exe" -c "import numpy; print(numpy.__version__)" 2^>nul') do set "NUMPY_VER=%%a"
-echo [INFO] NumPy version: %NUMPY_VER%
-echo %NUMPY_VER% | findstr "^1\.26\." >nul || (
-    echo [WARN] NumPy %NUMPY_VER% != 1.26.4. Re-installing...
-    uv pip install --force-reinstall numpy==1.26.4 --python "%VENV%\python.exe"
+REM Check PyQt6
+"%VENV%\python.exe" -c "import PyQt6" 2>nul || (
+    echo [WARN] PyQt6 not found. Installing...
+    uv pip install PyQt6 --python "%VENV%\python.exe"
 )
 
 start /wait "" "%VENV%\python.exe" "%ROOT%\src\main.py"
@@ -65,10 +65,10 @@ set "CONDA_DIR=%TOOLS%\miniconda"
 set "VENV=%ROOT%\.venv"
 set "CACHE=%ROOT%\cache"
 set "MODELS=%ROOT%\models"
-set "OUTPUTS=%ROOT%\outputs"
 set "FFMPEG_DIR=%ROOT%\ffmpeg"
+set "ASSETS=%ROOT%\assets"
 
-:: UV локальный кэш + copy mode для портативности
+:: UV local cache + copy mode for portability
 set "UV_CACHE_DIR=%CACHE%\uv"
 set "UV_LINK_MODE=copy"
 
@@ -92,6 +92,7 @@ if exist "%VENV%\python.exe" (
     if exist "%CACHE%" rmdir /s /q "%CACHE%" 2>nul
     if exist "%TOOLS%" rmdir /s /q "%TOOLS%" 2>nul
     if exist "%FFMPEG_DIR%" rmdir /s /q "%FFMPEG_DIR%" 2>nul
+    if exist "%ASSETS%" rmdir /s /q "%ASSETS%" 2>nul
     echo Old folders deleted.
 )
 
@@ -100,7 +101,7 @@ if not exist "%TOOLS%" mkdir "%TOOLS%"
 if not exist "%CACHE%" mkdir "%CACHE%"
 if not exist "%CACHE%\uv" mkdir "%CACHE%\uv"
 if not exist "%MODELS%" mkdir "%MODELS%"
-if not exist "%OUTPUTS%" mkdir "%OUTPUTS%"
+if not exist "%ASSETS%" mkdir "%ASSETS%"
 if not exist "%ROOT%\src" mkdir "%ROOT%\src"
 
 echo [STEP] Checking Miniconda...
@@ -122,16 +123,19 @@ del "%TOOLS%\uv.zip" >nul 2>&1
 echo UV ready.
 
 echo [STEP] Checking or Installing FFmpeg...
-if not exist "%FFMPEG_DIR%\bin\ffmpeg.exe" (    
-    echo FFmpeg not found...
+
+if not exist "%FFMPEG_DIR%\bin\ffmpeg.exe" (
+    echo FFmpeg not found locally. Checking system...
 
     where ffmpeg >nul 2>&1
     if errorlevel 1 (
-        echo Install FFmpeg with help of Windows Package Manager...
+        echo Installing FFmpeg via Windows Package Manager...
         winget install --id Gyan.FFmpeg --silent --accept-source-agreements --accept-package-agreements
     )
+
     if not exist "%FFMPEG_DIR%\bin" mkdir "%FFMPEG_DIR%\bin"
-    powershell -NoProfile -NonInteractive -Command "$sysPath = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source; if ($sysPath) { $sysDir = Split-Path $sysPath; Copy-Item -Path \"$sysDir\*\" -Destination '%FFMPEG_DIR%\bin' -Force; echo 'FFmpeg successfully copied to the AI environment.' } else { echo '[ERROR] Couldn't copy FFmpeg files!' }"
+
+    powershell -NoProfile -NonInteractive -Command "$sysPath = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source; if ($sysPath) { $sysDir = Split-Path $sysPath; Copy-Item -Path \"$sysDir\*\" -Destination '%FFMPEG_DIR%\bin' -Force; echo 'FFmpeg copied to AI environment.' } else { echo '[ERROR] Failed to copy FFmpeg files!' }"
 
 ) else (
     echo ffmpeg already exists.
@@ -139,7 +143,6 @@ if not exist "%FFMPEG_DIR%\bin\ffmpeg.exe" (
 
 set "OLD_PATH=%PATH%"
 set "PATH=%CONDA_DIR%\Scripts;%CONDA_DIR%;%TOOLS%;%FFMPEG_DIR%\bin;%PATH%"
-
 
 echo [STEP] Creating conda environment...
 if exist "%VENV%\python.exe" goto env_present
@@ -153,19 +156,22 @@ if exist "%ProgramFiles%\NVIDIA Corporation\NVSMI\nvidia-smi.exe" set "HAS_GPU=1
 
 call "%CONDA_DIR%\Scripts\activate.bat" "%VENV%"
 
-echo [STEP] Installing PyTorch 2.1.2 (compatible with LaMa)...
+echo [STEP] Installing PyTorch 2.4.1 (compatible with NumPy 2.x)...
 if "%HAS_GPU%"=="1" (
-    echo [INFO] Installing torch 2.1.2+cu121 for NVIDIA GPU...
-    uv pip install --force-reinstall torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu121 --python "%VENV%\python.exe"
+    echo [INFO] Installing torch 2.4.1+cu121 for NVIDIA GPU...
+    uv pip install --force-reinstall torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121 --python "%VENV%\python.exe"
 ) else (
-    echo [INFO] Installing CPU torch 2.1.2...
-    uv pip install --force-reinstall torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cpu --python "%VENV%\python.exe"
+    echo [INFO] Installing CPU torch 2.4.1...
+    uv pip install --force-reinstall torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu --python "%VENV%\python.exe"
 )
 
 echo [STEP] Installing dependencies...
 uv pip install opencv-python pillow tqdm --python "%VENV%\python.exe"
 
-echo [STEP] Installing SimpleLama (without deps to keep torch 2.1.2)...
+echo [STEP] Installing PyQt6 (UI framework)...
+uv pip install PyQt6 PyQt6-Qt6 --python "%VENV%\python.exe"
+
+echo [STEP] Installing SimpleLama...
 uv pip install simple-lama-inpainting --no-deps --python "%VENV%\python.exe"
 
 echo [STEP] Downloading LaMa model...
@@ -178,10 +184,8 @@ if not exist "%LAMA_PT%" (
     echo [INFO] Model already exists: %LAMA_PT%
 )
 
-echo [STEP] Freezing NumPy to 1.26.4 (prevent auto-upgrade)...
-uv pip install --force-reinstall numpy==1.26.4 --python "%VENV%\python.exe"
-
 echo [INFO] Models folder: %MODELS%
+echo [INFO] Assets folder: %ASSETS%
 echo [INFO] ffmpeg: %FFMPEG_DIR%\bin
 echo [INFO] UV cache: %UV_CACHE_DIR%
 
@@ -195,7 +199,6 @@ echo.
 echo IMPORTANT: Create these files manually in %ROOT%\src\:
 echo   - main.py
 echo   - inpainter.py
-echo   - video_processor.py
 echo.
 pause
 goto main_menu
@@ -211,8 +214,9 @@ set "CONDA_DIR=%TOOLS%\miniconda"
 set "VENV=%ROOT%\.venv"
 set "CACHE=%ROOT%\cache"
 set "FFMPEG_DIR=%ROOT%\ffmpeg"
+set "ASSETS=%ROOT%\assets"
 
-:: UV локальный кэш + copy mode для портативности
+:: UV local cache + copy mode for portability
 set "UV_CACHE_DIR=%CACHE%\uv"
 set "UV_LINK_MODE=copy"
 
@@ -230,35 +234,38 @@ if exist "%ProgramFiles%\NVIDIA Corporation\NVSMI\nvidia-smi.exe" set "HAS_GPU=1
 call "%CONDA_DIR%\Scripts\activate.bat" "%VENV%"
 
 if "%HAS_GPU%"=="1" (
-    echo [INFO] Re-installing PyTorch 2.1.2+cu121...
-    uv pip install --force-reinstall torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu121 --python "%VENV%\python.exe"
+    echo [INFO] Re-installing PyTorch 2.4.1+cu121...
+    uv pip install --force-reinstall torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121 --python "%VENV%\python.exe"
 ) else (
-    echo [INFO] Re-installing PyTorch CPU 2.1.2...
-    uv pip install --force-reinstall torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cpu --python "%VENV%\python.exe"
+    echo [INFO] Re-installing PyTorch CPU 2.4.1...
+    uv pip install --force-reinstall torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu --python "%VENV%\python.exe"
 )
 
 echo [INFO] Updating dependencies...
 uv pip install --upgrade opencv-python pillow tqdm --python "%VENV%\python.exe"
+
+echo [INFO] Updating PyQt6...
+uv pip install --upgrade PyQt6 PyQt6-Qt6 --python "%VENV%\python.exe"
 
 echo [INFO] Updating SimpleLama...
 uv pip install --upgrade simple-lama-inpainting --no-deps --python "%VENV%\python.exe"
 
 echo [STEP] Checking ffmpeg...
 if not exist "%FFMPEG_DIR%\bin\ffmpeg.exe" (
-    echo [INFO] FFmpeg is not found in the local folder. Checking the system...
+    echo [INFO] FFmpeg not found locally. Checking system...
+
     where ffmpeg >nul 2>&1
     if errorlevel 1 (
-        echo [INFO] Installing the official FFmpeg via Windows Package Manager...
+        echo [INFO] Installing FFmpeg via Windows Package Manager...
         winget install --id Gyan.FFmpeg --silent --accept-source-agreements --accept-package-agreements
     )
+
     if not exist "%FFMPEG_DIR%\bin" mkdir "%FFMPEG_DIR%\bin"
-    powershell -NoProfile -NonInteractive -Command "$sysPath = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source; if ($sysPath) { $sysDir = Split-Path $sysPath; Copy-Item -Path \"$sysDir\*\" -Destination '%FFMPEG_DIR%\bin' -Force; echo 'ffmpeg downloaded.' } else { echo '[ERROR] Couldn't copy FFmpeg files!' }"
+
+    powershell -NoProfile -NonInteractive -Command "$sysPath = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source; if ($sysPath) { $sysDir = Split-Path $sysPath; Copy-Item -Path \"$sysDir\*\" -Destination '%FFMPEG_DIR%\bin' -Force; echo 'ffmpeg downloaded.' } else { echo '[ERROR] Failed to copy FFmpeg files!' }"
 ) else (
     echo ffmpeg already exists.
 )
-
-echo [STEP] Freezing NumPy to 1.26.4...
-uv pip install --force-reinstall numpy==1.26.4 --python "%VENV%\python.exe"
 
 echo [INFO] Update finished.
 echo [INFO] UV cache: %UV_CACHE_DIR%
