@@ -3,7 +3,6 @@ import numpy as np
 import os
 from pathlib import Path
 
-# Используем проверенную библиотеку simple-lama-inpainting
 try:
     from simple_lama_inpainting import SimpleLama
     HAS_SIMPLE_LAMA = True
@@ -48,7 +47,6 @@ def load_model(model_path=None, device=None):
     if device is None:
         device = get_device()
 
-    # --- Поиск локальной модели ---------------------------------------
     local_path = None
     if model_path is None:
         script_dir = Path(__file__).parent
@@ -66,7 +64,6 @@ def load_model(model_path=None, device=None):
     else:
         local_path = _find_model_file(model_path)
 
-    # --- SimpleLama ---------------------------------------------------
     if not HAS_SIMPLE_LAMA:
         raise RuntimeError(
             "simple-lama-inpainting не установлен. Установите:\n"
@@ -92,7 +89,6 @@ def load_model(model_path=None, device=None):
 
 
 def inpaint_img_with_lama(img, mask, model=None, device=None):
-    # ---------- Fallback на OpenCV ------------------------------------
     if model is None or not isinstance(model, dict) or model.get("mode") != "simple_lama":
         if len(mask.shape) == 3:
             mask = mask[:, :, 0]
@@ -100,6 +96,5 @@ def inpaint_img_with_lama(img, mask, model=None, device=None):
         return cv2.inpaint(img, mask_bin, 3, cv2.INPAINT_TELEA)
 
     lama = model["model"]
-    # SimpleLama принимает numpy array, возвращает PIL Image
     result = lama(img, mask)
     return np.array(result)
