@@ -159,10 +159,10 @@ call "%CONDA_DIR%\Scripts\activate.bat" "%VENV%"
 echo [STEP] Installing PyTorch 2.4.1 (compatible with NumPy 2.x)...
 if "%HAS_GPU%"=="1" (
     echo [INFO] Installing torch 2.4.1+cu121 for NVIDIA GPU...
-    uv pip install --force-reinstall torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121 --python "%VENV%\python.exe"
+    uv pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 --python "%VENV%\python.exe"
 ) else (
     echo [INFO] Installing CPU torch 2.4.1...
-    uv pip install --force-reinstall torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu --python "%VENV%\python.exe"
+    uv pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cpu --python "%VENV%\python.exe"
 )
 
 echo [STEP] Installing dependencies...
@@ -235,10 +235,10 @@ call "%CONDA_DIR%\Scripts\activate.bat" "%VENV%"
 
 if "%HAS_GPU%"=="1" (
     echo [INFO] Re-installing PyTorch 2.4.1+cu121...
-    uv pip install --force-reinstall torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121 --python "%VENV%\python.exe"
+    uv pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 --python "%VENV%\python.exe"
 ) else (
     echo [INFO] Re-installing PyTorch CPU 2.4.1...
-    uv pip install --force-reinstall torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu --python "%VENV%\python.exe"
+    uv pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cpu --python "%VENV%\python.exe"
 )
 
 echo [INFO] Updating dependencies...
