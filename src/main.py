@@ -21,16 +21,26 @@ from PyQt6.QtWidgets import (
     QGraphicsPixmapItem, QGraphicsEllipseItem, QGraphicsProxyWidget,
     QDialog, QProgressBar, QToolButton, QStyle
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint, QRectF, QSize, QSettings, QDir
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint, QRectF, QSize, QSettings, QDir, QEvent
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QBrush, QFont,
     QIcon, QCursor, QWheelEvent, QMouseEvent, QKeyEvent,
-    QPalette, QPainterPath, QShortcut, QKeySequence
+    QPalette, QPainterPath, QShortcut, QKeySequence,
+    QDragEnterEvent, QDropEvent
 )
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtCore import QByteArray
 
 from inpainter import load_model, inpaint_img_with_lama
+
+# =============================================================================
+# SUPPORTED FORMATS
+# =============================================================================
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff", ".gif", ".ico"}
+VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".avi", ".mkv", ".webm", ".mpg", ".mpeg",
+              ".wmv", ".flv", ".3gp", ".ts", ".mts", ".m2ts"}
+# Контейнеры, куда ffmpeg пишет H.264 напрямую; остальные сохраняем как mp4
+DIRECT_CONTAINERS = {".mp4", ".mov", ".mkv", ".avi"}
 
 
 # =============================================================================
@@ -419,8 +429,8 @@ class FrameExtractor(QThread):
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil = Image.fromarray(frame_rgb)
             pil.save(
-                os.path.join(self.assets_dir, f"frame_{idx:06d}.jpg"),
-                "JPEG", quality=85
+                os.path.join(self.assets_dir, f"frame_{idx:06d}.png"),
+                "PNG", compress_level=1
             )
             idx += 1
 
@@ -436,7 +446,7 @@ class FrameExtractor(QThread):
 # =============================================================================
 class CanvasWidget(QGraphicsView):
     """Custom graphics view with brush tool support"""
-    zoom_changed = pyqtSignal(float)  # zoom_percent
+    zoom_changed = pyqtSignal(float)
 
     def __init__(self, parent=None, main_window=None):
         super().__init__(parent)
@@ -448,7 +458,7 @@ class CanvasWidget(QGraphicsView):
         self.setStyleSheet("background-color: #2D2D2D; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px;")
         self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
 
-        # Scrollbars - show when content doesn't fit
+        # Scrollbars
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -474,40 +484,115 @@ class CanvasWidget(QGraphicsView):
 
         # Zoom state
         self.base_scale = 1.0
-        self.zoom_percent = 100.0  # 100 = fit to view (base_scale)
+        self.zoom_percent = 100.0
         self.min_zoom = 10.0
         self.max_zoom = 900.0
         self.is_fit_to_view = True
 
         # Cursor
         self.setMouseTracking(True)
+
+        # ===== DRAG AND DROP SETUP =====
+        # Перехватываем события исключительно на viewport, чтобы избежать
+        # конфликтов между родительским виджетом и его внутренней областью.
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.viewport().installEventFilter(self)
+        # =================================
+
         self._setup_cursor()
         self._setup_placeholder()
 
+    # ===== DRAG AND DROP EVENT FILTER =====
+    def eventFilter(self, obj, event):
+        from PyQt6.QtCore import QEvent
+        if obj is self.viewport():
+            if event.type() == QEvent.Type.DragEnter:
+                self._handle_drag_enter(event)
+                return True  # Останавливаем распространение события
+            if event.type() == QEvent.Type.DragMove:
+                event.acceptProposedAction()
+                return True
+            if event.type() == QEvent.Type.DragLeave:
+                self._handle_drag_leave(event)
+                return True
+            if event.type() == QEvent.Type.Drop:
+                self._handle_drop(event)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _handle_drag_enter(self, event):
+        print("[DEBUG] Viewport dragEnterEvent")
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    ext = Path(url.toLocalFile()).suffix.lower()
+                    if ext in IMAGE_EXTS or ext in VIDEO_EXTS:
+                        event.acceptProposedAction()
+                        self.setStyleSheet(
+                            "background-color: #2D2D2D; "
+                            "border: 2px solid #8B5CF6; "
+                            "border-radius: 12px;"
+                        )
+                        return
+        event.ignore()
+
+    def _handle_drag_leave(self, event):
+        print("[DEBUG] Viewport dragLeaveEvent")
+        self.setStyleSheet(
+            "background-color: #2D2D2D; "
+            "border: 1px solid rgba(255,255,255,0.12); "
+            "border-radius: 12px;"
+        )
+
+    def _handle_drop(self, event):
+        print("[DEBUG] Viewport dropEvent")
+        self.setStyleSheet(
+            "background-color: #2D2D2D; "
+            "border: 1px solid rgba(255,255,255,0.12); "
+            "border-radius: 12px;"
+        )
+
+        if event.mimeData().hasUrls() and self._main_window:
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    file_path = url.toLocalFile()
+                    ext = Path(file_path).suffix.lower()
+                    print(f"[DEBUG] Dropped: {file_path}, ext: '{ext}'")
+                    if ext in IMAGE_EXTS:
+                        print(f"[DEBUG] Loading image: {file_path}")
+                        self._main_window._load_image(file_path)
+                        event.acceptProposedAction()
+                        return
+                    elif ext in VIDEO_EXTS:
+                        print(f"[DEBUG] Loading video: {file_path}")
+                        self._main_window._load_video(file_path)
+                        event.acceptProposedAction()
+                        return
+        event.ignore()
+
+    # =======================================
+
     def _cursor_pen_width(self):
-        """Return cursor pen width based on zoom level"""
         return 1 if self.zoom_percent > 200 else 3
 
     def _setup_cursor(self):
-        """Setup brush cursor (yellow circle with crosshair)"""
         self.cursor_item = QGraphicsEllipseItem(0, 0, self.brush_size, self.brush_size)
         pen = QPen(QColor("#FFD700"))
         pen.setWidth(self._cursor_pen_width())
         self.cursor_item.setPen(pen)
         self.cursor_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         self.cursor_item.setVisible(False)
-        self.cursor_item.setZValue(1000)  # Always on top
+        self.cursor_item.setZValue(1000)
         self.scene.addItem(self.cursor_item)
 
     def _set_cursor_color(self, color_hex):
-        """Change cursor circle color (yellow for draw, red for erase)"""
         if self.cursor_item:
             pen = QPen(QColor(color_hex))
             pen.setWidth(self._cursor_pen_width())
             self.cursor_item.setPen(pen)
 
     def _update_cursor_appearance(self):
-        """Update cursor pen width when zoom changes"""
         if not self.cursor_item:
             return
         color = "#FF4444" if self.is_erasing else "#FFD700"
@@ -516,8 +601,6 @@ class CanvasWidget(QGraphicsView):
         self.cursor_item.setPen(pen)
 
     def _setup_placeholder(self):
-        """Setup placeholder icon and text when no media loaded"""
-        # Create icon - use white color for visibility on dark background
         icon = create_icon_svg("image", "white", 80)
         icon_pixmap = icon.pixmap(QSize(80, 80))
         self.placeholder_icon = self.scene.addPixmap(icon_pixmap)
@@ -525,33 +608,27 @@ class CanvasWidget(QGraphicsView):
         self.placeholder_icon.setZValue(100)
         self.placeholder_icon.setOpacity(0.24)
 
-        # Create text
-        self.placeholder_text = self.scene.addText("Load an image or video to get started")
+        self.placeholder_text = self.scene.addText("Drag & drop a file here, or click 'Load Media' button")
         font = QFont("Segoe UI", 14)
         self.placeholder_text.setFont(font)
         self.placeholder_text.setDefaultTextColor(QColor(255, 255, 255, 138))
         self.placeholder_text.setZValue(100)
-
         self._center_placeholder()
 
     def _center_placeholder(self):
-        """Center placeholder in the view"""
         if not self.placeholder_icon or not self.placeholder_text:
             return
-
         view_rect = self.viewport().rect()
         scene_rect = self.mapToScene(view_rect).boundingRect()
         center_x = scene_rect.center().x()
         center_y = scene_rect.center().y()
 
-        # Center icon
         icon_rect = self.placeholder_icon.boundingRect()
         self.placeholder_icon.setPos(
             center_x - icon_rect.width() / 2,
             center_y - icon_rect.height() / 2 - 30
         )
 
-        # Center text below icon
         text_rect = self.placeholder_text.boundingRect()
         self.placeholder_text.setPos(
             center_x - text_rect.width() / 2,
@@ -559,20 +636,16 @@ class CanvasWidget(QGraphicsView):
         )
 
     def _update_transform(self):
-        """Apply current zoom transform. Recalculates base_scale from current viewport size."""
         if not self.pixmap_item:
             return
-
         view_rect = self.viewport().rect()
         img_rect = self.pixmap_item.boundingRect()
 
-        # Calculate base scale to fit image in view (KeepAspectRatio)
         scale_x = view_rect.width() / img_rect.width()
         scale_y = view_rect.height() / img_rect.height()
         self.base_scale = min(scale_x, scale_y)
 
         self.resetTransform()
-
         if self.is_fit_to_view:
             self.zoom_percent = 100.0
             self.scale(self.base_scale, self.base_scale)
@@ -596,6 +669,7 @@ class CanvasWidget(QGraphicsView):
         self.mask_pixmap_item = None
         self.placeholder_icon = None
         self.placeholder_text = None
+
         self.pixmap_item = self.scene.addPixmap(pixmap)
         self.pixmap_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         self.setSceneRect(self.pixmap_item.boundingRect())
@@ -606,7 +680,6 @@ class CanvasWidget(QGraphicsView):
         self._update_transform()
 
     def load_frame(self, pixmap, frame_idx=0):
-        # Clear everything including placeholder
         self.scene.clear()
         self.current_frame_idx = frame_idx
         h, w = pixmap.height(), pixmap.width()
@@ -614,29 +687,28 @@ class CanvasWidget(QGraphicsView):
         self.mask_pixmap_item = None
         self.placeholder_icon = None
         self.placeholder_text = None
+
         self.pixmap_item = self.scene.addPixmap(pixmap)
         self.pixmap_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         self.setSceneRect(self.pixmap_item.boundingRect())
         self.has_media = True
-        # Re-add cursor on top
+
         self._setup_cursor()
         self._update_mask_display()
         self._update_transform()
 
     def clear_mask(self):
-        """Clear the mask for current frame — saves empty mask so later frames inherit empty"""
         if self.current_mask is not None:
             self.current_mask.fill(0)
             self.frame_masks[self.current_frame_idx] = self.current_mask.copy()
             self._update_mask_display()
 
     def _get_image_pos(self, pos):
-        """Convert mouse position to image coordinates"""
         if not self.pixmap_item:
             return None
         img_rect = self.pixmap_item.boundingRect()
         scene_pos = self.mapToScene(pos)
-        # Check if within image bounds
+
         if not img_rect.contains(scene_pos):
             return None
         return scene_pos
@@ -644,21 +716,18 @@ class CanvasWidget(QGraphicsView):
     def mouseMoveEvent(self, event: QMouseEvent):
         pos = event.pos()
         img_pos = self._get_image_pos(pos)
-
         if img_pos and self.has_media:
             self.cursor_item.setVisible(True)
             self.cursor_item.setPos(
                 img_pos.x() - self.brush_size / 2,
                 img_pos.y() - self.brush_size / 2
             )
-
             if event.buttons() == Qt.MouseButton.LeftButton and self.is_drawing:
                 self._draw_stamp(img_pos)
             elif event.buttons() == Qt.MouseButton.RightButton and self.is_erasing:
                 self._draw_stamp(img_pos)
         else:
             self.cursor_item.setVisible(False)
-
         super().mouseMoveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent):
@@ -669,7 +738,7 @@ class CanvasWidget(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton:
             self.is_drawing = True
             self.is_erasing = False
-            self._set_cursor_color("#FFD700")  # yellow
+            self._set_cursor_color("#FFD700")
             self._stroke_mask_before = self.current_mask.copy() if self.current_mask is not None else None
             pos = self._get_image_pos(event.pos())
             if pos:
@@ -677,12 +746,11 @@ class CanvasWidget(QGraphicsView):
         elif event.button() == Qt.MouseButton.RightButton:
             self.is_erasing = True
             self.is_drawing = False
-            self._set_cursor_color("#FF4444")  # red for eraser
+            self._set_cursor_color("#FF4444")
             self._stroke_mask_before = self.current_mask.copy() if self.current_mask is not None else None
             pos = self._get_image_pos(event.pos())
             if pos:
                 self._draw_stamp(pos)
-
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
@@ -692,11 +760,10 @@ class CanvasWidget(QGraphicsView):
         elif event.button() == Qt.MouseButton.RightButton:
             self.is_erasing = False
             self._push_undo()
-            self._set_cursor_color("#FFD700")  # back to yellow
+            self._set_cursor_color("#FFD700")
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event: QWheelEvent):
-        """Ctrl+Wheel = zoom, Wheel = brush size"""
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             delta = event.angleDelta().y()
             if delta > 0:
@@ -706,14 +773,13 @@ class CanvasWidget(QGraphicsView):
             event.accept()
             return
 
-        # Adjust brush size with mouse wheel
         delta = event.angleDelta().y()
         if delta > 0:
             self.brush_size = min(200, self.brush_size + 5)
         else:
             self.brush_size = max(3, self.brush_size - 5)
         self.set_brush_size(self.brush_size)
-        # Emit signal to update spinbox and slider in main window
+
         if self._main_window is not None:
             self._main_window.brush_size_changed.emit(self.brush_size)
         event.accept()
@@ -737,13 +803,10 @@ class CanvasWidget(QGraphicsView):
         self._update_transform()
 
     def _draw_stamp(self, pos):
-        """Draw brush stamp on mask array and update display"""
         if self.pixmap_item is None or self.current_mask is None:
             return
-
         x = int(round(pos.x()))
         y = int(round(pos.y()))
-
         h, w = self.current_mask.shape
         radius = int(self.brush_size / 2)
 
@@ -759,7 +822,6 @@ class CanvasWidget(QGraphicsView):
         self._update_mask_display()
 
     def _get_mask_for_frame(self, frame_idx, h, w):
-        """Return mask for given frame: own, inherited from previous, or empty"""
         if frame_idx in self.frame_masks:
             return self.frame_masks[frame_idx].copy()
         prev_indices = [idx for idx in self.frame_masks if idx < frame_idx]
@@ -769,11 +831,9 @@ class CanvasWidget(QGraphicsView):
         return np.zeros((h, w), dtype=np.uint8)
 
     def set_current_frame(self, idx):
-        """Set current frame index for mask storage"""
         self.current_frame_idx = idx
 
     def _push_undo(self):
-        """Save current stroke to undo stack if mask changed"""
         if self._stroke_mask_before is None or self.current_mask is None:
             return
         if np.array_equal(self._stroke_mask_before, self.current_mask):
@@ -789,7 +849,6 @@ class CanvasWidget(QGraphicsView):
         self._stroke_mask_before = None
 
     def undo(self):
-        """Undo last stroke (Ctrl+Z)"""
         if not self.undo_stack:
             return
         action = self.undo_stack.pop()
@@ -797,7 +856,6 @@ class CanvasWidget(QGraphicsView):
         self._restore_mask(action['frame_idx'], action['before'])
 
     def redo(self):
-        """Redo last undone stroke (Ctrl+Shift+Z)"""
         if not self.redo_stack:
             return
         action = self.redo_stack.pop()
@@ -805,25 +863,19 @@ class CanvasWidget(QGraphicsView):
         self._restore_mask(action['frame_idx'], action['after'])
 
     def _restore_mask(self, frame_idx, mask):
-        """Restore mask for a specific frame"""
         self.frame_masks[frame_idx] = mask.copy()
         if frame_idx == self.current_frame_idx:
             self.current_mask = mask.copy()
             self._update_mask_display()
 
     def _update_mask_display(self):
-        """Convert mask array to semi-transparent pink overlay"""
         if self.current_mask is None:
             return
-
         h, w = self.current_mask.shape
-
         rgba = np.zeros((h, w, 4), dtype=np.uint8)
         mask = self.current_mask > 0
-        rgba[mask] = [255, 105, 180, 110]  # R, G, B, A (more visible)
+        rgba[mask] = [255, 105, 180, 110]
 
-        # Safe: convert numpy array to Python bytes before passing to QImage
-        # This avoids "memory not pinned" errors in PyQt6
         image = QImage(rgba.tobytes(), w, h, w * 4, QImage.Format.Format_RGBA8888)
         pixmap = QPixmap.fromImage(image)
 
@@ -834,7 +886,6 @@ class CanvasWidget(QGraphicsView):
             self.mask_pixmap_item.setPixmap(pixmap)
 
     def get_mask(self):
-        """Return current mask as numpy array (0-255)"""
         return self.current_mask
 
     def resizeEvent(self, event):
@@ -843,7 +894,6 @@ class CanvasWidget(QGraphicsView):
             self._update_transform()
         else:
             self._center_placeholder()
-
 
 # =============================================================================
 # MAIN WINDOW
@@ -1443,11 +1493,13 @@ class WatermarkRemoverWindow(QMainWindow):
 
     # ===== LOAD MEDIA =====
     def _on_load_click(self):
+        all_exts = sorted(IMAGE_EXTS | VIDEO_EXTS)
+        filter_str = "Media (" + " ".join("*" + e for e in all_exts) + ")"
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select Media",
             self.last_directory,
-            "Images/Videos (*.jpg *.jpeg *.png *.mp4 *.avi *.mov *.mkv)"
+            filter_str
         )
         if not file_path:
             return
@@ -1456,34 +1508,41 @@ class WatermarkRemoverWindow(QMainWindow):
         self.settings.setValue("last_directory", self.last_directory)
 
         ext = Path(file_path).suffix.lower()
-        if ext in [".mp4", ".avi", ".mov", ".mkv"]:
+        if ext in VIDEO_EXTS:
             self._load_video(file_path)
-        else:
+        elif ext in IMAGE_EXTS:
             self._load_image(file_path)
+        else:
+            QMessageBox.warning(self, "Unsupported Format", "Unsupported format: " + ext)
 
     def _load_image(self, path):
         """Load image file"""
+        self.last_directory = str(Path(path).parent)
+        self.settings.setValue("last_directory", self.last_directory)
+
         try:
             self._last_image_path = path
-            # Clear previous state
             self.canvas.clear_mask()
             self.is_video = False
             self.player_panel.setVisible(False)
             self.thumbnail_scroll.setVisible(False)
 
-            # Load and save to assets
-            pil = Image.open(path).convert("RGB")
-            img_w, img_h = pil.size
-            self.counter += 1
+            # Открываем оригинал как есть — без промежуточной PNG-копии.
+            # Декодируем через Pillow (тот же декодер, что и при обработке)
+            # и выводим напрямую: без пересжатий и лишних файлов на диске.
+            pil = Image.open(path)
+            arr = np.array(pil.convert("RGB"))
+            hh, ww = arr.shape[:2]
+            qimg = QImage(arr.tobytes(), ww, hh, ww * 3, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimg)
+            img_w, img_h = ww, hh
 
-            save_path = self.assets_dir / f"img_{self.counter:04d}.png"
-            pil.save(save_path, "PNG")
-
-            # Display
-            pixmap = QPixmap(str(save_path))
             self.canvas.load_image(pixmap)
 
-            # Show image info
+            # Подчищаем PNG-копии от старой версии
+            for f in self.assets_dir.glob("img_*.png"):
+                f.unlink()
+
             file_size = Path(path).stat().st_size
             size_str = self._format_file_size(file_size)
             self.image_info_label.setText(f"{img_w} × {img_h} px  •  {size_str}")
@@ -1494,6 +1553,9 @@ class WatermarkRemoverWindow(QMainWindow):
 
     def _load_video(self, path):
         """Load video file"""
+        self.last_directory = str(Path(path).parent)
+        self.settings.setValue("last_directory", self.last_directory)
+        
         try:
             self._last_video_path = path
             if self.cap:
@@ -1519,8 +1581,9 @@ class WatermarkRemoverWindow(QMainWindow):
             self.image_info_panel.setVisible(False)
 
             # Clear old frames
-            for f in self.assets_dir.glob("frame_*.jpg"):
-                f.unlink()
+            for pattern in ("frame_*.jpg", "frame_*.png"):
+                for f in self.assets_dir.glob(pattern):
+                    f.unlink()
 
             # Show loading dialog
             self.progress = QProgressDialog("Extracting video frames...", "Cancel", 0, self.total_frames, self)
@@ -1572,7 +1635,7 @@ class WatermarkRemoverWindow(QMainWindow):
             return
         idx = max(0, min(idx, self.extracted_count - 1))
 
-        frame_path = self.assets_dir / f"frame_{idx:06d}.jpg"
+        frame_path = self.assets_dir / f"frame_{idx:06d}.png"
         if frame_path.exists():
             pixmap = QPixmap(str(frame_path))
             self.canvas.load_frame(pixmap, idx)
@@ -1586,7 +1649,7 @@ class WatermarkRemoverWindow(QMainWindow):
             return
         idx = max(0, min(idx, self.extracted_count - 1))
 
-        frame_path = self.assets_dir / f"frame_{idx:06d}.jpg"
+        frame_path = self.assets_dir / f"frame_{idx:06d}.png"
         if frame_path.exists():
             pixmap = QPixmap(str(frame_path))
             self.canvas.load_frame(pixmap, idx)
@@ -1659,14 +1722,28 @@ class WatermarkRemoverWindow(QMainWindow):
     def _process_image(self):
         """Process single image with inpainting"""
         input_path = Path(self._last_image_path)
-        default_name = input_path.parent / (input_path.stem + "_inpainted.png")
+
+        # Формат выхода по умолчанию = формат входа
+        src_ext = input_path.suffix.lower()
+
+        # Один фильтр; расширение исходника первым — Windows допишет
+        # именно его, если пользователь введёт имя без расширения
+        known = sorted(IMAGE_EXTS)
+        exts = [src_ext] + [e for e in known if e != src_ext]
+        filter_str = "Images (" + " ".join("*" + e for e in exts) + ")"
+
+        default_name = input_path.stem + "_inpainted" + input_path.suffix
         output_path, _ = QFileDialog.getSaveFileName(
             self, "Save Inpainted Image",
-            str(Path(self.last_directory) / default_name.name),
-            "Images (*.png *.jpg *.jpeg)"
+            str(Path(self.last_directory) / default_name),
+            filter_str
         )
         if not output_path:
             return
+
+        # Страховка: имя без расширения — берём формат исходника
+        if not Path(output_path).suffix:
+            output_path += src_ext or ".png"
 
         self.last_directory = str(Path(output_path).parent)
         self.settings.setValue("last_directory", self.last_directory)
@@ -1686,14 +1763,31 @@ class WatermarkRemoverWindow(QMainWindow):
         QApplication.processEvents()
 
         try:
-            # Читаем через PIL — поддержка UTF-8 путей (кириллица, пробелы)
-            pil_img = Image.open(str(input_path)).convert("RGB")
-            img_rgb = np.array(pil_img)
-            result = inpaint_img_with_lama(img_rgb, mask, self.model)
+            pil_img = Image.open(str(input_path))
 
-            # Сохраняем через PIL — cv2.imwrite не умеет UTF-8 пути на Windows
+            # Сохраняем альфа-канал, если он был (для PNG/WEBP/TIFF)
+            if (pil_img.mode in ("RGBA", "LA", "PA")
+                    or (pil_img.mode == "P" and "transparency" in pil_img.info)):
+                alpha = pil_img.convert("RGBA").getchannel("A")
+            else:
+                alpha = None
+
+            img_rgb = np.array(pil_img.convert("RGB"))
+            result = inpaint_img_with_lama(img_rgb, mask, self.model, whole_image=True)
+
             result_pil = Image.fromarray(result)
-            result_pil.save(output_path)
+            out_ext = Path(output_path).suffix.lower()
+
+            if alpha is not None and alpha.size == result_pil.size and out_ext not in (".jpg", ".jpeg", ".bmp"):
+                result_pil = result_pil.convert("RGBA")
+                result_pil.putalpha(alpha)
+
+            if out_ext in (".jpg", ".jpeg"):
+                result_pil.save(output_path, quality=95, subsampling=0)
+            elif out_ext == ".webp":
+                result_pil.save(output_path, quality=95)
+            else:
+                result_pil.save(output_path)
 
             progress.close()
             QMessageBox.information(self, "Success", "Image saved to:" + chr(10) + output_path)
@@ -1701,15 +1795,20 @@ class WatermarkRemoverWindow(QMainWindow):
             progress.close()
             QMessageBox.critical(self, "Error", "Inpainting failed:" + chr(10) + str(e))
 
+
     def _process_video(self):
         """Process video frame by frame with per-frame masks"""
         input_path = Path(self._last_video_path)
-        default_name = input_path.parent / (input_path.stem + "_inpainted" + input_path.suffix)
+        src_ext = input_path.suffix.lower()
+        out_ext = src_ext if src_ext in DIRECT_CONTAINERS else ".mp4"
+        default_name = input_path.parent / (input_path.stem + "_inpainted" + out_ext)
+
         output_path, _ = QFileDialog.getSaveFileName(
             self, "Save Inpainted Video",
             str(Path(self.last_directory) / default_name.name),
             "Videos (*.mp4 *.avi *.mov *.mkv)"
         )
+
         if not output_path:
             return
 
@@ -1732,9 +1831,10 @@ class WatermarkRemoverWindow(QMainWindow):
                 progress.setValue(i)
                 progress.setLabelText("Processing frame " + str(i+1) + "/" + str(self.extracted_count) + "...")
                 if progress.wasCanceled():
-                    break
-                frame_path = self.assets_dir / ("frame_%06d.jpg" % i)
-                frame = cv2.imread(str(frame_path))
+                    return  # не собираем частичное видео; finally почистит temp
+                frame_path = self.assets_dir / ("frame_%06d.png" % i)
+                # UTF-8-безопасное чтение (кириллица и пробелы в путях)
+                frame = cv2.imdecode(np.fromfile(str(frame_path), dtype=np.uint8), cv2.IMREAD_COLOR)
                 if frame is None:
                     continue
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -1745,10 +1845,12 @@ class WatermarkRemoverWindow(QMainWindow):
                 else:
                     result = frame_rgb
                 out_path = temp_dir / ("frame_%06d.png" % i)
-                cv2.imwrite(str(out_path), cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
+                # UTF-8-безопасная запись
+                ok, buf = cv2.imencode(".png", cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
+                if ok:
+                    buf.tofile(str(out_path))
             progress.setValue(self.extracted_count)
 
-            # Assemble video with original audio and parameters
             self._assemble_video(input_path, temp_dir, output_path)
             QMessageBox.information(self, "Success", "Video saved to:" + chr(10) + output_path)
         except Exception as e:
@@ -1761,7 +1863,6 @@ class WatermarkRemoverWindow(QMainWindow):
 
     def _assemble_video(self, original_path, temp_dir, output_path):
         """Assemble processed frames into video, preserving original audio and params"""
-        # Find ffmpeg
         ffmpeg_cmd = None
         try:
             subprocess.run(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
@@ -1769,9 +1870,9 @@ class WatermarkRemoverWindow(QMainWindow):
         except (subprocess.CalledProcessError, FileNotFoundError):
             script_dir = Path(__file__).parent
             for candidate in [
+                script_dir.parent / 'ffmpeg' / 'bin' / 'ffmpeg.exe',  # фактическое место из .bat
                 script_dir / 'ffmpeg' / 'bin' / 'ffmpeg.exe',
                 script_dir / 'ffmpeg.exe',
-                script_dir.parent / 'ffmpeg' / 'bin' / 'ffmpeg.exe',
                 script_dir.parent / 'ffmpeg.exe',
             ]:
                 if candidate.exists():
@@ -1780,25 +1881,30 @@ class WatermarkRemoverWindow(QMainWindow):
         if ffmpeg_cmd is None:
             raise RuntimeError("ffmpeg not found. Please install ffmpeg.")
 
-        fps = self.fps if self.fps else 30
+        # fps: защита от 0 и NaN
+        fps = self.fps if (self.fps and self.fps > 0 and self.fps == self.fps) else 30
         pattern = str(temp_dir / "frame_%06d.png")
 
-        # Build ffmpeg command: re-encode video from frames, copy audio from original
+        same_container = Path(output_path).suffix.lower() == Path(original_path).suffix.lower()
+        audio_args = ["-c:a", "copy"] if same_container else ["-c:a", "aac", "-b:a", "192k"]
+
         cmd = [
             ffmpeg_cmd, '-y',
-            '-framerate', str(fps),
+            '-framerate', f"{fps:.6f}",
             '-i', pattern,
             '-i', str(original_path),
-            '-c:v', 'libx264',
-            '-preset', 'fast',
-            '-crf', '18',
-            '-pix_fmt', 'yuv420p',
-            '-c:a', 'copy',
             '-map', '0:v:0',
             '-map', '1:a:0?',
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-vf', 'crop=trunc(iw/2)*2:trunc(ih/2)*2',  # чётные размеры для yuv420p
+            '-pix_fmt', 'yuv420p',
+            *audio_args,
             '-shortest',
-            output_path
         ]
+        if Path(output_path).suffix.lower() in ('.mp4', '.mov'):
+            cmd += ['-movflags', '+faststart']
+        cmd.append(output_path)
+
         result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
         if result.returncode != 0:
             raise RuntimeError("ffmpeg failed: " + (result.stderr or ""))
