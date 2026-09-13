@@ -70,7 +70,7 @@ Watermark Remover — графическое приложение для уда�
 
 Установщик автоматически скачает и настроит:
 - Miniconda (портативный Python 3.10)
-- PyTorch 2.1.2 с поддержкой CUDA 12.1
+- PyTorch с поддержкой CUDA
 - UV package manager (ускоренная установка зависимостей)
 - Модель LaMa (`big-lama.pt`, ~200MB)
 - FFmpeg для работы с видео
